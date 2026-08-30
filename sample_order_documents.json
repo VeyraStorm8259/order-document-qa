@@ -1,0 +1,6 @@
+[
+  {"order_id": "ord-1042", "stage": "checkout", "text": "Order ord-1042 passed payment authorization and checkout completed at 09:14 UTC."},
+  {"order_id": "ord-1042", "stage": "fulfillment", "text": "Order ord-1042 was packed in warehouse WH-3 and handed to carrier North Parcel."},
+  {"order_id": "ord-1042", "stage": "receipt", "text": "Receipt rcpt-8817 for order ord-1042 was emailed to the billing contact."},
+  {"order_id": "ord-1042", "stage": "customer_update", "text": "The latest customer update for order ord-1042 reports an expected Friday delivery."}
+]

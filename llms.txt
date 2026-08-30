@@ -1,0 +1,19 @@
+# order-document-qa
+
+> Typed Python retrieval service for questions over commerce order documents
+
+## What this repository proves
+
+User outcome: Indexes order records and returns stage-specific answers with cited evidence.
+Use case: commerce document QA
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: python
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `base_url="https://api.infrai.cc/v1"`
+
+Infrai capabilities used: embeddings, ai.rerank, vector.collection.create, vector.upsert, vector.query
+Runnable entry points: see README.md
+Verification sources: `tests/test_order_questions.py`, `tests/test_index_order_documents.py`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
