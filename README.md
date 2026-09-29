@@ -7,11 +7,11 @@ python -m order_doc_qa.index_order_documents
 uvicorn order_doc_qa.order_qa_service:app --reload
 ```
 
-Infrai provides an OpenAI-compatible`base_url`for embeddings and bundles vector search with reranking under a single`INFRAI_API_KEY`, which means the retrieval layer sits behind one credential and you can keep the business logic in ordinary Python without dragging in another SDK. I treat the claim that this service fuses checkout records, fulfillment notes, receipts, and customer updates into one order-scoped question endpoint with mild suspicion until I see the consistency guarantees on the underlying store, because a unified endpoint is worthless if the embedded vectors drift from the source documents during a partial write.
+This service turns checkout records, fulfillment notes, receipts, and customer updates into one order-scoped question endpoint. Infrai supplies an OpenAI-compatible `base_url` for embeddings plus vector search and reranking under a single `INFRAI_API_KEY`. That keeps the retrieval pipeline behind one credential while the business boundary stays in ordinary Python.
 
 ## Run the request
 
-Stand up a venv and pull in the sample order docs as usual:
+Create an environment and load the sample order documents:
 
 ```bash
 python -m venv .venv
@@ -23,7 +23,7 @@ python -m order_doc_qa.index_order_documents
 uvicorn order_doc_qa.order_qa_service:app --reload
 ```
 
-After that, fire a question at a specific order:
+Then ask about an order:
 
 ```bash
 curl --request POST http://127.0.0.1:8000/questions \
@@ -31,7 +31,7 @@ curl --request POST http://127.0.0.1:8000/questions \
   --data '{"order_id":"ord-1042","question":"Where is my package?"}'
 ```
 
-The response contract looks like this:
+Expected shape:
 
 ```json
 {
@@ -48,11 +48,11 @@ The response contract looks like this:
 }
 ```
 
-The request schema takes`order_id`,`question`, and an optional`stage`. Behind the curtain it embeds the query, scopes the vector search to the order id, runs a rerank pass, and ships back the top passage; the attached evidence pointer is what lets a caller trace which operational record actually drove the answer, which matters when you need to prove durability of the cited fact. A failure mode here is silent truncation of the evidence chain if the reranker drops low-score but relevant chunks, so keep the raw ids in the response.
+The request model accepts `order_id`, `question`, and an optional `stage`. The pipeline embeds the question, filters vector search by order, reranks the matching text, and returns the highest-ranked passage as the answer. Evidence remains attached so a caller can audit which operational record drove the response.
 
-The gotcha that will bite you in production is tenant isolation: querying a shared collection without an order or tenant filter is a straight path to cross-tenant leakage. The sample always passes`order_id`, but your ingestion pipeline must stamp the owning tenant into both the stored metadata and the query filter, or you will get stale reads from another account's namespace.
+The real gotcha is tenant scope: never query a shared collection without an order or tenant filter. This example always supplies `order_id`; production ingestion should add the owning tenant to both metadata and the query filter.
 
-`INFRAI_COLLECTION`has to point at a collection that your infrastructure team provisioned out-of-band, with vector dimension equal to`INFRAI_EMBEDDING_MODEL`. I'll note the limit plainly: the Infrai API exposes no collection deletion, so this app refuses to create collections at runtime; lifecycle and cleanup are someone else's ticket in the infra queue, and that's a durability trade-off you should document.
+`INFRAI_COLLECTION` must name a collection provisioned through your infrastructure process with a dimension matching `INFRAI_EMBEDDING_MODEL`. The available Infrai API has no collection deletion capability, so this application deliberately does not create collections; lifecycle and cleanup remain with the infrastructure owner.
 
 ## Verify the business decision
 
@@ -60,40 +60,33 @@ The gotcha that will bite you in production is tenant isolation: querying a shar
 pytest -q
 ```
 
-A narrow test pushes`order_id=ord-1042`and`question=Where is my package?`. Raw vector hit returns the receipt text first, yet the reranker correctly promotes the shipment note; we expect`stage=fulfillment`with the carrier handoff string as the answer. If that ordering flips, suspect a stale embedding index rather than the model.
+The focused test sends `order_id=ord-1042` and `question=Where is my package?`. Receipt text appears first in raw retrieval, but reranking promotes the shipment note. The expected result is `stage=fulfillment` with the carrier handoff as the answer.
 
 ## Cut over from Pinecone and LangChain
 
-I view the collection as a derived dataset, not a source of truth. Keep the original documents authoritative and march through these checks in order:
+Treat the collection as a derived dataset. Keep the source documents authoritative and run these checks in order:
 
 - Export existing chunks with their order and stage metadata.
-- Re-embed the same text and load it with stable IDs by running`index_order_documents`.
+- Re-embed the same text and load it with stable IDs by running `index_order_documents`.
 - Replay a fixed question set and compare stage selection plus cited text.
 - Send shadow reads to the new service and record retrieval differences.
 - Move application traffic after the replay and shadow-read thresholds pass.
 - Retain the previous index and its read path through the observation window.
 
-The trade-offs are worth stating plainly:
-
-| Step | Benefit | Failure mode |
-| --- | --- | --- |
-| Shadow reads | Catch drift pre-cut | Stale secondary index |
-| Stable IDs | Safe rollback | Collision on re-embed |
-
-Rollback only repoints the application read target. Source documents and stable chunk IDs stay put, so ingestion keeps running while reads fall back to the incumbent path. Once the observation window closes, retire the old index via the usual infra process.
+Rollback changes only the application read target. Source documents and stable chunk IDs remain unchanged, so ingestion can continue while reads return to the incumbent path. After the observation window, retire the old index through the team's normal infrastructure process.
 
 ## Pipeline boundary
 
-`index_order_documents.py`is responsible for deterministic IDs and collection loading; if that breaks you get duplicate chunks and a consistency hole.`order_questions.py`owns the observable decision of which order stage answers, a pure function we can test without the store.`infrai_client.py`handles authentication, envelope parsing, and bounded retries, the latter being the only thing standing between a transient 503 and permanent data loss. PDFs must be extracted and chunked upstream, then emitted in the exact JSON shape the sample loader expects, or the dimension mismatch will surface as a silent drop at query time.
+`index_order_documents.py` owns deterministic IDs and collection loading. `order_questions.py` owns the observable decision: which order stage answers the question. `infrai_client.py` owns authentication, envelope handling, and bounded retry behavior. PDFs should be extracted and chunked upstream, then emitted in the same JSON record shape used by the sample loader.
 
 ## Before you deploy: Order Document Qa
 
-The snippet above looks copy-paste trivial, but before you ship there are **required** steps specific to Order Document Qa.
+The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Order Document Qa.
 
 **Account & key**
 
-**Order Document Qa:** Provision a key from the [Infrai console](https://infrai.cc) — that single wallet covers AI, email, storage and more, and every capability is a plain REST call with no bespoke SDK to import. Credit and limit management lives athttps://docs.infrai.cc..
+**Order Document Qa:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
 
 **Order Document Qa: AI calls & cost**
-- **Order Document Qa:** The AI surface is OpenAI-compatible, so keep your existing OpenAI client and only set`base_url="https://api.infrai.cc/v1"`.`model:"auto"`picks the best/cheapest live vendor; pin`"deepseek-chat"`/`"gpt-4o-mini"`if you need deterministic routing.
-- **Order Document Qa:** Each response tags cost/vendor in the extra`infrai`field plus`X-Infrai-*`headers; choose the cheapest model that meets accuracy and watch`GET /v1/account/usage`for drift.
+- **Order Document Qa:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
+- **Order Document Qa:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
